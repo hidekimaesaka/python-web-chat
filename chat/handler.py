@@ -1,50 +1,32 @@
-from json import loads, JSONDecodeError
-
-from socketserver import BaseRequestHandler
-
 from chat.models.client import Client
 
-from chat.errors.invalid_request import InvalidRequestError
+from chat.protocol import Protocol
 
 
-class ChatHandler(BaseRequestHandler):
-
+class ChatHandler(Protocol):
     clients = {}
 
-    def handle(self):
-        id = self.client_address[1]
-        request = self.request
-        client = Client(id, request)
+    def setup(self) -> None:
+        id = self._get_id()
+        data = self._recv(1024)
+        message = self._get_message(data)
+        username = self._get_username(message)
+        self.clients[id] = Client(id, username, self.request)
+        self.broadcast(data)
 
-        self.clients[id] = client
-
+    def handle(self) -> None:
         while True:
-            request_data = self.request.recv(1024).strip()
-            json_data = self.process_request_data(request_data)
+            data = self._recv(1024)
+            message = self._get_message(data)
+            if not message:
+                break
+            self._log_message(message)
+            self.broadcast(data)
 
-            if json_data:
-                username = self.get_username(json_data)
-                message = self.get_message(json_data)
-                client.set_username(username)
-                print(f'{client.username}: {message}')
-                self.broadcast(request_data)
+    def _recv(self, length: int) -> bytes:
+        return self.request.recv(length).strip()
 
-            break
-
-    def process_request_data(self, request_data: bytes) -> dict:
-        try:
-            return loads(request_data.decode())
-
-        except JSONDecodeError:
-            print(InvalidRequestError.message)
-
-    def get_username(self, json_data: dict) -> str:
-        return json_data.get('username')
-    
-    def get_message(self, json_data: dict) -> str:
-        return json_data.get('message')
-
-    def broadcast(self, msg) -> None:
+    def broadcast(self, msg: bytes) -> None:
         for client in self.clients.values():
             if client.request != self.request:
                 client.request.sendall(msg)
